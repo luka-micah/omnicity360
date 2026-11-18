@@ -1,0 +1,1123 @@
+// Prisma schema for Hotel Booking Marketplace
+// Phase 1: Foundation schema - identity, hotels, rooms, rates, inventory, booking, payments, finance
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// Identity and Access
+// ============================================
+
+enum UserRole {
+  customer
+  hotel_owner
+  hotel_staff
+  platform_support
+  platform_admin
+}
+
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  email           String    @unique @db.VarChar(255)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  firstName       String    @map("first_name") @db.VarChar(100)
+  lastName        String    @map("last_name") @db.VarChar(100)
+  phone           String?   @db.VarChar(20)
+  role            UserRole  @default(customer)
+  emailVerified   Boolean   @default(false) @map("email_verified")
+  phoneVerified   Boolean   @default(false) @map("phone_verified")
+  termsAcceptedAt DateTime? @map("terms_accepted_at")
+  isActive        Boolean   @default(true) @map("is_active")
+  lastLoginAt     DateTime? @map("last_login_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  customerProfile      CustomerProfile?
+  partnerProfile       PartnerProfile?
+  sessions             UserSession[]
+  verificationTokens   VerificationToken[]
+  hotels               Hotel[]
+  hotelMemberships     HotelMembership[]
+  hotelStatusHistory   HotelStatusHistory[]
+  bookings             Booking[]
+  cancellationRequests CancellationRequest[]
+  auditLogs            AuditLog[]
+  notifications        Notification[]
+  idempotencyRecords   IdempotencyRecord[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+model CustomerProfile {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  dateOfBirth    DateTime? @map("date_of_birth") @db.Date
+  nationality    String?   @db.VarChar(2)
+  addressLine1   String?   @map("address_line1") @db.VarChar(255)
+  addressLine2   String?   @map("address_line2") @db.VarChar(255)
+  city           String?   @db.VarChar(100)
+  state          String?   @db.VarChar(100)
+  country        String    @default("NG") @db.VarChar(2)
+  postalCode     String?   @map("postal_code") @db.VarChar(20)
+  marketingOptIn Boolean   @default(false) @map("marketing_opt_in")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("customer_profiles")
+}
+
+model UserSession {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  // Stores a SHA-256 hash of the opaque refresh token, never the raw token.
+  refreshTokenHash String    @unique @map("refresh_token") @db.VarChar(64)
+  deviceInfo       String?   @map("device_info") @db.VarChar(500)
+  ipAddress        String?   @map("ip_address") @db.VarChar(45)
+  userAgent        String?   @map("user_agent") @db.VarChar(500)
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  lastUsedAt       DateTime  @default(now()) @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model VerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  // Stores a SHA-256 hash of the raw token.
+  token     String    @unique @db.VarChar(255)
+  type      String    @db.VarChar(50) // email_verification, password_reset, phone_verification
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+model PartnerProfile {
+  id                        String   @id @default(uuid()) @db.Uuid
+  userId                    String   @unique @map("user_id") @db.Uuid
+  companyName               String   @map("company_name") @db.VarChar(255)
+  companyRegistrationNumber String?  @map("company_registration_number") @db.VarChar(100)
+  createdAt                 DateTime @default(now()) @map("created_at")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("partner_profiles")
+}
+
+// ============================================
+// Hotel and Inventory
+// ============================================
+
+enum HotelStatus {
+  draft
+  submitted
+  under_review
+  approved
+  rejected
+  suspended
+  archived
+}
+
+enum InventoryMode {
+  category_quantity
+  physical_rooms
+}
+
+enum RatePlanType {
+  standard
+  refundable
+  non_refundable
+  corporate
+  promotional
+}
+
+enum RoomStatus {
+  available
+  maintenance
+  out_of_service
+}
+
+model Hotel {
+  id                   String      @id @default(uuid()) @db.Uuid
+  partnerId            String      @map("partner_id") @db.Uuid
+  name                 String      @db.VarChar(255)
+  slug                 String      @unique @db.VarChar(100)
+  description          String?     @db.Text
+  propertyType         String      @map("property_type") @db.VarChar(50)
+  addressLine1         String      @map("address_line1") @db.VarChar(255)
+  addressLine2         String?     @map("address_line2") @db.VarChar(255)
+  city                 String      @db.VarChar(100)
+  state                String      @db.VarChar(100)
+  country              String      @default("NG") @db.VarChar(2)
+  postalCode           String?     @map("postal_code") @db.VarChar(20)
+  latitude             Float?
+  longitude            Float?
+  contactEmail         String?     @map("contact_email") @db.VarChar(255)
+  contactPhone         String?     @map("contact_phone") @db.VarChar(20)
+  contactWebsite       String?     @map("contact_website") @db.VarChar(255)
+  checkInTime          String      @default("14:00") @map("check_in_time") @db.VarChar(5)
+  checkOutTime         String      @default("11:00") @map("check_out_time") @db.VarChar(5)
+  amenities            String[]    @default([])
+  houseRules           String?     @map("house_rules") @db.Text
+  accessibilityInfo    String?     @map("accessibility_info") @db.Text
+  defaultCommissionBps Int?        @map("default_commission_bps")
+  status               HotelStatus @default(draft)
+  rejectionReason      String?     @map("rejection_reason") @db.Text
+  submissionNotes      String?     @map("submission_notes") @db.Text
+  internalNotes        String?     @map("internal_notes") @db.Text
+  submittedAt          DateTime?   @map("submitted_at")
+  approvedAt           DateTime?   @map("approved_at")
+  approvedBy           String?     @map("approved_by") @db.Uuid
+  suspendedAt          DateTime?   @map("suspended_at")
+  archivedAt           DateTime?   @map("archived_at")
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+
+  partner              User                        @relation(fields: [partnerId], references: [id], onDelete: Restrict)
+  memberships          HotelMembership[]
+  images               HotelMedia[]
+  documents            HotelDocument[]
+  statusHistory        HotelStatusHistory[]
+  roomCategories       RoomCategory[]
+  physicalRooms        PhysicalRoom[]
+  ratePlans            RatePlan[]
+  nightlyRates         NightlyRate[]
+  inventoryDays        InventoryDay[]
+  inventoryHolds       InventoryHold[]
+  maintenanceBlocks    MaintenanceBlock[]
+  cancellationPolicies CancellationPolicy[]
+  bookings             Booking[]
+  quotes               Quote[]
+  commissionAgreements CommissionAgreement[]
+  bookingCommissions   BookingCommissionSnapshot[]
+  ledgers              LedgerEntry[]
+  payouts              HotelPayout[]
+  statements           HotelStatement[]
+
+  @@index([status])
+  @@index([city, state])
+  @@index([partnerId])
+  @@index([partnerId, status])
+  @@index([status, createdAt])
+  @@index([slug])
+  @@map("hotels")
+}
+
+model HotelMembership {
+  id         String    @id @default(uuid()) @db.Uuid
+  hotelId    String    @map("hotel_id") @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  role       String    @db.VarChar(50) // owner, manager, front_desk, inventory_manager, finance_viewer
+  status     String    @default("pending") @db.VarChar(20) // pending, active, revoked
+  invitedBy  String?   @map("invited_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  acceptedAt DateTime? @map("accepted_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelId, userId])
+  @@index([userId])
+  @@map("hotel_memberships")
+}
+
+model HotelMedia {
+  id        String   @id @default(uuid()) @db.Uuid
+  hotelId   String   @map("hotel_id") @db.Uuid
+  url       String   @db.VarChar(500)
+  caption   String?  @db.VarChar(500)
+  altText   String?  @map("alt_text") @db.VarChar(255)
+  sortOrder Int      @default(0) @map("sort_order")
+  mimeType  String?  @map("mime_type") @db.VarChar(100)
+  width     Int?
+  height    Int?
+  sizeBytes Int?     @map("size_bytes")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  @@map("hotel_media")
+}
+
+model HotelDocument {
+  id          String    @id @default(uuid()) @db.Uuid
+  hotelId     String    @map("hotel_id") @db.Uuid
+  type        String    @db.VarChar(50) // cac_certificate, tax_clearance, fire_safety, business_permit, other
+  url         String    @db.VarChar(500)
+  description String?   @db.VarChar(500)
+  verified    Boolean   @default(false)
+  verifiedBy  String?   @map("verified_by") @db.Uuid
+  verifiedAt  DateTime? @map("verified_at")
+  uploadedAt  DateTime  @default(now()) @map("uploaded_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  @@map("hotel_documents")
+}
+
+model HotelStatusHistory {
+  id         String       @id @default(uuid()) @db.Uuid
+  hotelId    String       @map("hotel_id") @db.Uuid
+  fromStatus HotelStatus? @map("from_status")
+  toStatus   HotelStatus  @map("to_status")
+  actorId    String?      @map("actor_id") @db.Uuid
+  actorType  String       @map("actor_type") @db.VarChar(20) // user | system
+  reason     String?      @db.Text
+  notes      String?      @db.Text
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([hotelId, createdAt])
+  @@index([actorId])
+  @@map("hotel_status_history")
+}
+
+model RoomCategory {
+  id               String        @id @default(uuid()) @db.Uuid
+  hotelId          String        @map("hotel_id") @db.Uuid
+  name             String        @db.VarChar(100)
+  slug             String        @db.VarChar(100)
+  description      String?       @db.Text
+  maxAdults        Int           @default(2) @map("max_adults")
+  maxChildren      Int           @default(2) @map("max_children")
+  bedConfiguration String?       @map("bed_configuration") @db.VarChar(100)
+  roomSizeSqm      Float?        @map("room_size_sqm")
+  amenities        String[]      @default([])
+  smokingAllowed   Boolean       @default(false) @map("smoking_allowed")
+  accessible       Boolean       @default(false)
+  inventoryMode    InventoryMode @default(category_quantity) @map("inventory_mode")
+  totalQuantity    Int?          @map("total_quantity") // required for category_quantity mode
+  baseRateAmount   Int           @map("base_rate_amount") // minor units (kobo)
+  baseRateCurrency String        @default("NGN") @map("base_rate_currency") @db.VarChar(3)
+  isActive         Boolean       @default(true) @map("is_active")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
+
+  hotel         Hotel               @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  images        RoomCategoryMedia[]
+  ratePlans     RatePlan[]
+  physicalRooms PhysicalRoom[]
+  inventoryDays InventoryDay[]
+  bookings      Booking[]
+  quotes        Quote[]
+
+  @@unique([hotelId, slug])
+  @@index([hotelId])
+  @@index([hotelId, isActive])
+  @@map("room_categories")
+}
+
+model RoomCategoryMedia {
+  id             String   @id @default(uuid()) @db.Uuid
+  roomCategoryId String   @map("room_category_id") @db.Uuid
+  url            String   @db.VarChar(500)
+  caption        String?  @db.VarChar(500)
+  altText        String?  @map("alt_text") @db.VarChar(255)
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  roomCategory RoomCategory @relation(fields: [roomCategoryId], references: [id], onDelete: Cascade)
+
+  @@index([roomCategoryId])
+  @@map("room_category_media")
+}
+
+model PhysicalRoom {
+  id             String     @id @default(uuid()) @db.Uuid
+  hotelId        String     @map("hotel_id") @db.Uuid
+  roomCategoryId String     @map("room_category_id") @db.Uuid
+  roomNumber     String     @map("room_number") @db.VarChar(50)
+  floor          Int?
+  description    String?    @db.Text
+  status         RoomStatus @default(available)
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  hotel             Hotel              @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomCategory      RoomCategory       @relation(fields: [roomCategoryId], references: [id], onDelete: Restrict)
+  maintenanceBlocks MaintenanceBlock[]
+
+  @@unique([hotelId, roomNumber])
+  @@index([hotelId])
+  @@index([roomCategoryId])
+  @@map("physical_rooms")
+}
+
+model RatePlan {
+  id                   String       @id @default(uuid()) @db.Uuid
+  hotelId              String       @map("hotel_id") @db.Uuid
+  roomCategoryId       String       @map("room_category_id") @db.Uuid
+  name                 String       @db.VarChar(100)
+  type                 RatePlanType @default(standard)
+  description          String?      @db.Text
+  baseRateAmount       Int          @map("base_rate_amount")
+  baseRateCurrency     String       @default("NGN") @map("base_rate_currency") @db.VarChar(3)
+  cancellationPolicyId String?      @map("cancellation_policy_id") @db.Uuid
+  minStayNights        Int          @default(1) @map("min_stay_nights")
+  maxStayNights        Int?         @map("max_stay_nights")
+  closedToArrival      DateTime[]   @default([]) @map("closed_to_arrival") @db.Date
+  closedToDeparture    DateTime[]   @default([]) @map("closed_to_departure") @db.Date
+  advancePurchaseDays  Int?         @map("advance_purchase_days")
+  isActive             Boolean      @default(true) @map("is_active")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  hotel        Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomCategory RoomCategory  @relation(fields: [roomCategoryId], references: [id], onDelete: Cascade)
+  quotes       Quote[]
+  nightlyRates NightlyRate[]
+
+  @@index([hotelId])
+  @@index([roomCategoryId])
+  @@map("rate_plans")
+}
+
+model NightlyRate {
+  id                String   @id @default(uuid()) @db.Uuid
+  hotelId           String   @map("hotel_id") @db.Uuid
+  roomCategoryId    String   @map("room_category_id") @db.Uuid
+  ratePlanId        String   @map("rate_plan_id") @db.Uuid
+  date              DateTime @db.Date
+  rateAmount        Int      @map("rate_amount") // minor units
+  rateCurrency      String   @default("NGN") @map("rate_currency") @db.VarChar(3)
+  minStay           Int?     @map("min_stay")
+  maxStay           Int?     @map("max_stay")
+  closedToArrival   Boolean  @default(false) @map("closed_to_arrival")
+  closedToDeparture Boolean  @default(false) @map("closed_to_departure")
+  stopSell          Boolean  @default(false) @map("stop_sell")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  hotel    Hotel    @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  ratePlan RatePlan @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelId, roomCategoryId, ratePlanId, date])
+  @@index([hotelId, date])
+  @@index([roomCategoryId, date])
+  @@map("nightly_rates")
+}
+
+model InventoryDay {
+  id                String   @id @default(uuid()) @db.Uuid
+  hotelId           String   @map("hotel_id") @db.Uuid
+  roomCategoryId    String   @map("room_category_id") @db.Uuid
+  date              DateTime @db.Date
+  quantity          Int      @default(0)
+  stopSell          Boolean  @default(false) @map("stop_sell")
+  minStay           Int?     @map("min_stay")
+  maxStay           Int?     @map("max_stay")
+  closedToArrival   Boolean  @default(false) @map("closed_to_arrival")
+  closedToDeparture Boolean  @default(false) @map("closed_to_departure")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  hotel        Hotel        @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomCategory RoomCategory @relation(fields: [roomCategoryId], references: [id], onDelete: Cascade)
+
+  @@unique([roomCategoryId, date])
+  @@index([hotelId, date])
+  @@index([roomCategoryId, date])
+  @@map("inventory_days")
+}
+
+model InventoryHold {
+  id             String    @id @default(uuid()) @db.Uuid
+  hotelId        String    @map("hotel_id") @db.Uuid
+  roomCategoryId String    @map("room_category_id") @db.Uuid
+  bookingId      String?   @map("booking_id") @db.Uuid
+  checkIn        DateTime  @map("check_in") @db.Date
+  checkOut       DateTime  @map("check_out") @db.Date
+  quantity       Int
+  status         String    @default("active") @db.VarChar(20) // active, released, committed
+  expiresAt      DateTime  @map("expires_at")
+  releasedAt     DateTime? @map("released_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  @@index([roomCategoryId, checkIn, checkOut])
+  @@index([status, expiresAt])
+  @@map("inventory_holds")
+}
+
+model MaintenanceBlock {
+  id             String   @id @default(uuid()) @db.Uuid
+  hotelId        String   @map("hotel_id") @db.Uuid
+  roomCategoryId String?  @map("room_category_id") @db.Uuid
+  physicalRoomId String?  @map("physical_room_id") @db.Uuid
+  startDate      DateTime @map("start_date") @db.Date
+  endDate        DateTime @map("end_date") @db.Date // exclusive
+  reason         String   @db.VarChar(500)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  hotel        Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  physicalRoom PhysicalRoom? @relation(fields: [physicalRoomId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId, startDate, endDate])
+  @@index([physicalRoomId, startDate, endDate])
+  @@map("maintenance_blocks")
+}
+
+enum CancellationPolicyTemplate {
+  flexible
+  moderate
+  strict
+  non_refundable
+  custom
+}
+
+model CancellationPolicy {
+  id                                      String                     @id @default(uuid()) @db.Uuid
+  hotelId                                 String?                    @map("hotel_id") @db.Uuid // null for platform templates
+  name                                    String                     @db.VarChar(100)
+  template                                CancellationPolicyTemplate
+  description                             String                     @db.Text
+  freeCancellationUntilHoursBeforeCheckIn Int?                       @map("free_cancellation_until_hours_before_check_in")
+  refundPercentBeforeDays                 Int?                       @map("refund_percent_before_days")
+  refundPercentAfterDays                  Int?                       @map("refund_percent_after_days")
+  customRules                             Json?                      @map("custom_rules") // [{ daysBeforeCheckIn, refundPercent }]
+  isPlatformTemplate                      Boolean                    @default(false) @map("is_platform_template")
+  createdAt                               DateTime                   @default(now()) @map("created_at")
+  updatedAt                               DateTime                   @updatedAt @map("updated_at")
+
+  hotel Hotel? @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  @@map("cancellation_policies")
+}
+
+// ============================================
+// Booking
+// ============================================
+
+enum BookingStatus {
+  pending_payment
+  confirmed
+  checked_in
+  checked_out
+  completed
+  cancellation_requested
+  cancelled
+  expired
+  no_show
+  manual_review
+}
+
+model Booking {
+  id                         String        @id @default(uuid()) @db.Uuid
+  reference                  String        @unique @db.VarChar(50)
+  accessToken                String        @unique @map("access_token") @db.VarChar(100)
+  status                     BookingStatus @default(pending_payment)
+  hotelId                    String        @map("hotel_id") @db.Uuid
+  customerId                 String?       @map("customer_id") @db.Uuid
+  roomCategoryId             String        @map("room_category_id") @db.Uuid
+  guestFirstName             String        @map("guest_first_name") @db.VarChar(100)
+  guestLastName              String        @map("guest_last_name") @db.VarChar(100)
+  guestEmail                 String        @map("guest_email") @db.VarChar(255)
+  guestPhone                 String        @map("guest_phone") @db.VarChar(20)
+  checkIn                    DateTime      @map("check_in") @db.Date
+  checkOut                   DateTime      @map("check_out") @db.Date
+  nights                     Int
+  adults                     Int
+  children                   Int           @default(0)
+  rooms                      Int           @default(1)
+  specialRequests            String?       @map("special_requests") @db.Text
+  // Price snapshot
+  subtotalAmount             Int           @map("subtotal_amount")
+  subtotalCurrency           String        @default("NGN") @map("subtotal_currency") @db.VarChar(3)
+  discountAmount             Int           @default(0) @map("discount_amount")
+  taxAmount                  Int           @default(0) @map("tax_amount")
+  feesAmount                 Int           @default(0) @map("fees_amount")
+  totalAmount                Int           @map("total_amount")
+  totalCurrency              String        @default("NGN") @map("total_currency") @db.VarChar(3)
+  // Policy snapshot
+  cancellationPolicyId       String?       @map("cancellation_policy_id") @db.Uuid
+  cancellationPolicySnapshot Json?         @map("cancellation_policy_snapshot")
+  // Commission snapshot
+  commissionBps              Int?          @map("commission_bps")
+  commissionAmount           Int?          @map("commission_amount")
+  commissionBasis            String?       @map("commission_basis") @db.VarChar(50)
+  // Timestamps
+  holdExpiresAt              DateTime?     @map("hold_expires_at")
+  confirmedAt                DateTime?     @map("confirmed_at")
+  checkedInAt                DateTime?     @map("checked_in_at")
+  checkedOutAt               DateTime?     @map("checked_out_at")
+  cancelledAt                DateTime?     @map("cancelled_at")
+  cancellationReason         String?       @map("cancellation_reason") @db.Text
+  expiredAt                  DateTime?     @map("expired_at")
+  createdAt                  DateTime      @default(now()) @map("created_at")
+  updatedAt                  DateTime      @updatedAt @map("updated_at")
+
+  hotel                Hotel                      @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  customer             User?                      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  roomCategory         RoomCategory               @relation(fields: [roomCategoryId], references: [id], onDelete: Restrict)
+  roomsSnapshot        BookingRoom[]
+  guests               BookingGuest[]
+  statusHistory        BookingStatusHistory[]
+  payments             Payment[]
+  cancellationRequests CancellationRequest[]
+  commissionSnapshot   BookingCommissionSnapshot?
+  ledgerEntries        LedgerEntry[]
+  notifications        Notification[]
+
+  @@index([reference])
+  @@index([accessToken])
+  @@index([hotelId, status])
+  @@index([customerId])
+  @@index([checkIn, checkOut])
+  @@index([status, holdExpiresAt])
+  @@map("bookings")
+}
+
+model Quote {
+  id                    String    @id @default(uuid()) @db.Uuid
+  hotelId               String    @map("hotel_id") @db.Uuid
+  roomCategoryId        String    @map("room_category_id") @db.Uuid
+  ratePlanId            String    @map("rate_plan_id") @db.Uuid
+  checkIn               DateTime  @map("check_in") @db.Date
+  checkOut              DateTime  @map("check_out") @db.Date
+  adults                Int
+  children              Int       @default(0)
+  rooms                 Int       @default(1)
+  snapshot              Json
+  commissionAgreementId String?   @map("commission_agreement_id") @db.Uuid
+  expiresAt             DateTime  @map("expires_at")
+  usedAt                DateTime? @map("used_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  hotel        Hotel        @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomCategory RoomCategory @relation(fields: [roomCategoryId], references: [id], onDelete: Cascade)
+  ratePlan     RatePlan     @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([hotelId, checkIn, checkOut])
+  @@map("quotes")
+}
+
+model BookingRoom {
+  id               String   @id @default(uuid()) @db.Uuid
+  bookingId        String   @map("booking_id") @db.Uuid
+  roomCategoryId   String   @map("room_category_id") @db.Uuid
+  roomCategoryName String   @map("room_category_name") @db.VarChar(100)
+  ratePlanId       String   @map("rate_plan_id") @db.Uuid
+  ratePlanName     String   @map("rate_plan_name") @db.VarChar(100)
+  ratePlanType     String   @map("rate_plan_type") @db.VarChar(50)
+  adults           Int
+  children         Int      @default(0)
+  quantity         Int      @default(1)
+  subtotalAmount   Int      @map("subtotal_amount")
+  subtotalCurrency String   @default("NGN") @map("subtotal_currency") @db.VarChar(3)
+  taxAmount        Int      @default(0) @map("tax_amount")
+  feesAmount       Int      @default(0) @map("fees_amount")
+  totalAmount      Int      @map("total_amount")
+  totalCurrency    String   @default("NGN") @map("total_currency") @db.VarChar(3)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  booking Booking        @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  nights  BookingNight[]
+
+  @@index([bookingId])
+  @@map("booking_rooms")
+}
+
+model BookingNight {
+  id            String   @id @default(uuid()) @db.Uuid
+  bookingRoomId String   @map("booking_room_id") @db.Uuid
+  date          DateTime @db.Date
+  rateAmount    Int      @map("rate_amount")
+  rateCurrency  String   @default("NGN") @map("rate_currency") @db.VarChar(3)
+  ratePlanId    String   @map("rate_plan_id") @db.Uuid
+  ratePlanName  String   @map("rate_plan_name") @db.VarChar(100)
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  bookingRoom BookingRoom @relation(fields: [bookingRoomId], references: [id], onDelete: Cascade)
+
+  @@index([bookingRoomId])
+  @@map("booking_nights")
+}
+
+model BookingGuest {
+  id              String   @id @default(uuid()) @db.Uuid
+  bookingId       String   @map("booking_id") @db.Uuid
+  firstName       String   @map("first_name") @db.VarChar(100)
+  lastName        String   @map("last_name") @db.VarChar(100)
+  email           String?  @db.VarChar(255)
+  phone           String?  @db.VarChar(20)
+  isPrimary       Boolean  @default(false) @map("is_primary")
+  specialRequests String?  @map("special_requests") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_guests")
+}
+
+model BookingStatusHistory {
+  id         String         @id @default(uuid()) @db.Uuid
+  bookingId  String         @map("booking_id") @db.Uuid
+  fromStatus BookingStatus? @map("from_status")
+  toStatus   BookingStatus  @map("to_status")
+  actorId    String?        @map("actor_id") @db.Uuid
+  actorType  String         @map("actor_type") @db.VarChar(20) // customer, hotel_staff, admin, system
+  reason     String?        @db.Text
+  metadata   Json?
+  createdAt  DateTime       @default(now()) @map("created_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_status_history")
+}
+
+model CancellationRequest {
+  id             String    @id @default(uuid()) @db.Uuid
+  bookingId      String    @map("booking_id") @db.Uuid
+  requestedBy    String    @map("requested_by") @db.VarChar(20) // customer, hotel, admin
+  requesterId    String?   @map("requester_id") @db.Uuid
+  reason         String    @db.Text
+  status         String    @default("pending") @db.VarChar(20) // pending, approved, rejected, auto_approved, auto_rejected
+  refundAmount   Int?      @map("refund_amount")
+  refundCurrency String?   @map("refund_currency") @db.VarChar(3)
+  decidedBy      String?   @map("decided_by") @db.Uuid
+  decisionNotes  String?   @map("decision_notes") @db.Text
+  decidedAt      DateTime? @map("decided_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  booking   Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  requester User?   @relation(fields: [requesterId], references: [id], onDelete: SetNull)
+
+  @@index([bookingId])
+  @@index([status])
+  @@map("cancellation_requests")
+}
+
+// ============================================
+// Payments
+// ============================================
+
+enum PaymentStatus {
+  initialized
+  pending
+  processing
+  succeeded
+  failed
+  abandoned
+  expired
+  refund_pending
+  partially_refunded
+  refunded
+  disputed
+}
+
+model Payment {
+  id                  String        @id @default(uuid()) @db.Uuid
+  bookingId           String        @map("booking_id") @db.Uuid
+  provider            String        @db.VarChar(50)
+  providerReference   String        @unique @map("provider_reference") @db.VarChar(255)
+  providerCheckoutUrl String?       @map("provider_checkout_url") @db.VarChar(1000)
+  amount              Int
+  currency            String        @default("NGN") @db.VarChar(3)
+  status              PaymentStatus @default(initialized)
+  idempotencyKey      String?       @unique @map("idempotency_key") @db.VarChar(128)
+  customerEmail       String        @map("customer_email") @db.VarChar(255)
+  customerName        String        @map("customer_name") @db.VarChar(255)
+  customerPhone       String        @map("customer_phone") @db.VarChar(20)
+  failureReason       String?       @map("failure_reason") @db.Text
+  metadata            Json?
+  initializedAt       DateTime      @default(now()) @map("initialized_at")
+  completedAt         DateTime?     @map("completed_at")
+  failedAt            DateTime?     @map("failed_at")
+  expiresAt           DateTime?     @map("expires_at")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  booking        Booking                @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  refunds        Refund[]
+  providerEvents PaymentProviderEvent[]
+
+  @@index([bookingId])
+  @@index([providerReference])
+  @@index([status])
+  @@map("payments")
+}
+
+model PaymentProviderEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  paymentId       String?   @map("payment_id") @db.Uuid
+  provider        String    @db.VarChar(50)
+  providerEventId String    @map("provider_event_id") @db.VarChar(255)
+  eventType       String    @map("event_type") @db.VarChar(100)
+  payload         Json
+  processedAt     DateTime? @map("processed_at")
+  processingError String?   @map("processing_error") @db.Text
+  retryCount      Int       @default(0) @map("retry_count")
+  receivedAt      DateTime  @default(now()) @map("received_at")
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@index([paymentId])
+  @@index([eventType])
+  @@map("payment_provider_events")
+}
+
+model Refund {
+  id               String    @id @default(uuid()) @db.Uuid
+  paymentId        String    @map("payment_id") @db.Uuid
+  amount           Int
+  currency         String    @default("NGN") @db.VarChar(3)
+  reason           String    @db.Text
+  status           String    @default("pending") @db.VarChar(20) // pending, processing, succeeded, failed, cancelled
+  providerRefundId String?   @map("provider_refund_id") @db.VarChar(255)
+  idempotencyKey   String?   @unique @map("idempotency_key") @db.VarChar(128)
+  initiatedBy      String    @map("initiated_by") @db.VarChar(20) // customer, hotel, admin
+  processedBy      String?   @map("processed_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  completedAt      DateTime? @map("completed_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([status])
+  @@map("refunds")
+}
+
+// ============================================
+// Commission and Finance
+// ============================================
+
+enum CommissionAgreementStatus {
+  draft
+  active
+  superseded
+  terminated
+}
+
+model CommissionAgreement {
+  id                String                    @id @default(uuid()) @db.Uuid
+  hotelId           String                    @map("hotel_id") @db.Uuid
+  commissionBps     Int                       @map("commission_bps")
+  effectiveFrom     DateTime                  @map("effective_from") @db.Date
+  effectiveTo       DateTime?                 @map("effective_to") @db.Date
+  terms             String?                   @db.Text
+  signedDocumentUrl String?                   @map("signed_document_url") @db.VarChar(500)
+  status            CommissionAgreementStatus @default(draft)
+  createdBy         String                    @map("created_by") @db.Uuid
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+
+  @@index([hotelId])
+  @@index([status])
+  @@index([effectiveFrom, effectiveTo])
+  @@map("commission_agreements")
+}
+
+model BookingCommissionSnapshot {
+  id               String   @id @default(uuid()) @db.Uuid
+  bookingId        String   @unique @map("booking_id") @db.Uuid
+  hotelId          String   @map("hotel_id") @db.Uuid
+  agreementId      String?  @map("agreement_id") @db.Uuid
+  commissionBps    Int      @map("commission_bps")
+  calculationBasis String   @map("calculation_basis") @db.VarChar(50)
+  discountFundedBy String   @map("discount_funded_by") @db.VarChar(20)
+  amount           Int
+  currency         String   @default("NGN") @db.VarChar(3)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  hotel   Hotel   @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+
+  @@index([hotelId])
+  @@map("booking_commission_snapshots")
+}
+
+enum LedgerAccountType {
+  platform_revenue
+  hotel_payable
+  customer_receivable
+  payment_provider_payable
+  tax_payable
+  cash
+}
+
+enum LedgerEntryType {
+  booking_revenue
+  commission
+  refund
+  refund_commission_reversal
+  payout
+  payout_adjustment
+  manual_adjustment
+}
+
+model LedgerTransaction {
+  id             String   @id @default(uuid()) @db.Uuid
+  description    String   @db.VarChar(500)
+  reference      String?  @db.VarChar(255)
+  referenceType  String?  @map("reference_type") @db.VarChar(50)
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(128)
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  entries LedgerEntry[]
+
+  @@index([reference, referenceType])
+  @@index([createdAt])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id            String            @id @default(uuid()) @db.Uuid
+  transactionId String            @map("transaction_id") @db.Uuid
+  accountType   LedgerAccountType @map("account_type")
+  accountId     String            @map("account_id") @db.Uuid
+  entryType     LedgerEntryType   @map("entry_type")
+  amount        Int // positive = debit, negative = credit (or vice versa; define convention)
+  currency      String            @default("NGN") @db.VarChar(3)
+  description   String            @db.VarChar(500)
+  hotelId       String?           @map("hotel_id") @db.Uuid
+  bookingId     String?           @map("booking_id") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  transaction LedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  hotel       Hotel?            @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+  booking     Booking?          @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
+  @@index([accountType, accountId])
+  @@index([hotelId])
+  @@index([bookingId])
+  @@map("ledger_entries")
+}
+
+enum PayoutStatus {
+  pending
+  processing
+  sent
+  failed
+  reconciled
+}
+
+model PayoutBatch {
+  id             String    @id @default(uuid()) @db.Uuid
+  name           String    @db.VarChar(255)
+  dateFrom       DateTime  @map("date_from") @db.Date
+  dateTo         DateTime  @map("date_to") @db.Date
+  status         String    @default("draft") @db.VarChar(20) // draft, processing, completed, failed
+  totalAmount    Int       @default(0) @map("total_amount")
+  currency       String    @default("NGN") @db.VarChar(3)
+  totalCount     Int       @default(0) @map("total_count")
+  processedCount Int       @default(0) @map("processed_count")
+  failedCount    Int       @default(0) @map("failed_count")
+  notes          String?   @db.Text
+  createdBy      String    @map("created_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  completedAt    DateTime? @map("completed_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  payouts HotelPayout[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("payout_batches")
+}
+
+model HotelPayout {
+  id          String       @id @default(uuid()) @db.Uuid
+  batchId     String?      @map("batch_id") @db.Uuid
+  hotelId     String       @map("hotel_id") @db.Uuid
+  amount      Int
+  currency    String       @default("NGN") @db.VarChar(3)
+  status      PayoutStatus @default(pending)
+  reference   String?      @db.VarChar(255) // bank transfer reference
+  evidenceUrl String?      @map("evidence_url") @db.VarChar(500)
+  notes       String?      @db.Text
+  processedBy String?      @map("processed_by") @db.Uuid
+  processedAt DateTime?    @map("processed_at")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  batch PayoutBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  hotel Hotel        @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+
+  @@index([batchId])
+  @@index([hotelId, status])
+  @@map("hotel_payouts")
+}
+
+model HotelStatement {
+  id              String   @id @default(uuid()) @db.Uuid
+  hotelId         String   @map("hotel_id") @db.Uuid
+  periodFrom      DateTime @map("period_from") @db.Date
+  periodTo        DateTime @map("period_to") @db.Date
+  grossRevenue    Int      @map("gross_revenue")
+  totalCommission Int      @map("total_commission")
+  totalRefunds    Int      @map("total_refunds")
+  netPayable      Int      @map("net_payable")
+  currency        String   @default("NGN") @db.VarChar(3)
+  bookingCount    Int      @map("booking_count")
+  generatedAt     DateTime @default(now()) @map("generated_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Restrict)
+
+  @@index([hotelId])
+  @@index([periodFrom, periodTo])
+  @@map("hotel_statements")
+}
+
+model ReconciliationRun {
+  id                     String    @id @default(uuid()) @db.Uuid
+  name                   String    @db.VarChar(255)
+  dateFrom               DateTime  @map("date_from") @db.Date
+  dateTo                 DateTime  @map("date_to") @db.Date
+  provider               String?   @db.VarChar(50)
+  hotelId                String?   @map("hotel_id") @db.Uuid
+  status                 String    @default("pending") @db.VarChar(20) // pending, running, completed, failed
+  totalTransactions      Int       @default(0) @map("total_transactions")
+  matchedCount           Int       @default(0) @map("matched_count")
+  discrepancyCount       Int       @default(0) @map("discrepancy_count")
+  totalDiscrepancyAmount Int       @default(0) @map("total_discrepancy_amount")
+  currency               String    @default("NGN") @db.VarChar(3)
+  createdBy              String    @map("created_by") @db.Uuid
+  createdAt              DateTime  @default(now()) @map("created_at")
+  completedAt            DateTime? @map("completed_at")
+
+  items ReconciliationItem[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("reconciliation_runs")
+}
+
+model ReconciliationItem {
+  id                String    @id @default(uuid()) @db.Uuid
+  runId             String    @map("run_id") @db.Uuid
+  type              String    @db.VarChar(50) // payment, refund, payout, commission
+  providerReference String    @map("provider_reference") @db.VarChar(255)
+  internalReference String?   @map("internal_reference") @db.Uuid
+  providerAmount    Int       @map("provider_amount")
+  internalAmount    Int?      @map("internal_amount")
+  currency          String    @default("NGN") @db.VarChar(3)
+  discrepancy       Int?
+  status            String    @default("pending") @db.VarChar(30) // matched, discrepancy, missing_internal, missing_provider, resolved
+  resolutionNotes   String?   @map("resolution_notes") @db.Text
+  resolvedBy        String?   @map("resolved_by") @db.Uuid
+  resolvedAt        DateTime? @map("resolved_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  run ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status])
+  @@map("reconciliation_items")
+}
+
+// ============================================
+// Operations
+// ============================================
+
+model Notification {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String?   @map("user_id") @db.Uuid
+  bookingId         String?   @map("booking_id") @db.Uuid
+  type              String    @db.VarChar(50) // booking_confirmation, payment_success, payment_failure, cancellation, etc.
+  channel           String    @db.VarChar(20) // email, sms, push
+  recipient         String    @db.VarChar(255)
+  subject           String?   @db.VarChar(255)
+  body              String    @db.Text
+  status            String    @default("pending") @db.VarChar(20) // pending, sent, failed, bounced
+  providerMessageId String?   @map("provider_message_id") @db.VarChar(255)
+  sentAt            DateTime? @map("sent_at")
+  failureReason     String?   @map("failure_reason") @db.Text
+  retryCount        Int       @default(0) @map("retry_count")
+  scheduledFor      DateTime? @map("scheduled_for")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user    User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  booking Booking? @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([bookingId])
+  @@index([status, scheduledFor])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  actorType  String   @map("actor_type") @db.VarChar(20) // customer, hotel_staff, admin, system
+  actorEmail String?  @map("actor_email") @db.VarChar(255)
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String?  @map("entity_id") @db.Uuid
+  oldValues  Json?    @map("old_values")
+  newValues  Json?    @map("new_values")
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.VarChar(500)
+  severity   String   @default("info") @db.VarChar(20) // info, warning, critical
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(uuid()) @db.Uuid
+  key          String   @unique @db.VarChar(128)
+  userId       String?  @map("user_id") @db.Uuid
+  operation    String   @db.VarChar(100)
+  requestHash  String   @map("request_hash") @db.VarChar(64)
+  responseBody Json?    @map("response_body")
+  statusCode   Int?     @map("status_code")
+  createdAt    DateTime @default(now()) @map("created_at")
+  expiresAt    DateTime @map("expires_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}

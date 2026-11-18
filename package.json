@@ -1,0 +1,42 @@
+{
+  "name": "hotel-marketplace",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hotel Booking Marketplace for Nigeria - Monorepo",
+  "scripts": {
+    "build:packages": "pnpm --filter @hotel-marketplace/domain run build && pnpm --filter @hotel-marketplace/contracts run build",
+    "dev": "pnpm run build:packages && pnpm --filter @hotel-marketplace/api dev",
+    "dev:web": "pnpm --filter @hotel-marketplace/web dev",
+    "build:web": "pnpm --filter @hotel-marketplace/web build",
+    "build": "pnpm run build:packages && pnpm --filter @hotel-marketplace/api run build",
+    "lint": "pnpm -r run lint",
+    "lint:fix": "pnpm -r run lint:fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,md,yml,yaml}\"",
+    "typecheck": "pnpm run build:packages && pnpm -r run typecheck",
+    "test": "pnpm run build:packages && pnpm -r run test",
+    "db:generate": "pnpm --filter @hotel-marketplace/api run db:generate",
+    "db:push": "pnpm --filter @hotel-marketplace/api run db:push",
+    "db:migrate": "pnpm --filter @hotel-marketplace/api run db:migrate",
+    "db:migrate:deploy": "pnpm --filter @hotel-marketplace/api run db:migrate:deploy",
+    "db:seed": "pnpm --filter @hotel-marketplace/api run db:seed",
+    "db:studio": "pnpm --filter @hotel-marketplace/api run db:studio",
+    "docs:api": "pnpm --filter @hotel-marketplace/api run docs:api"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@typescript-eslint/eslint-plugin": "^7.5.0",
+    "@typescript-eslint/parser": "^7.5.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-import-resolver-typescript": "^3.6.1",
+    "eslint-plugin-import": "^2.29.1",
+    "prettier": "^3.2.5",
+    "typescript": "^5.4.3"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.1.0"
+}
