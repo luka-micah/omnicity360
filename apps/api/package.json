@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "vercel-build": "pnpm --filter @hotel-marketplace/domain run build && pnpm --filter @hotel-marketplace/contracts run build && pnpm run db:generate && pnpm run db:migrate:deploy && pnpm run build",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,json,md,yml,yaml}\"",
